@@ -18,6 +18,12 @@ import android.os.Build;
 import android.os.Bundle;
 import android.provider.OpenableColumns;
 import android.speech.RecognizerIntent;
+import android.speech.SpeechRecognizer;
+import android.speech.RecognitionListener;
+import android.Manifest;
+import android.content.pm.PackageManager;
+import android.os.Handler;
+import android.os.Looper;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.text.InputType;
@@ -55,7 +61,7 @@ public final class NexusChatActivity extends Activity {
     private static final int BACK=0xff090B12, SURFACE=0xff171B29, SOFT=0xff23293A,
             WHITE=0xffF5F6FB, MUTED=0xffA8AEC0, CYAN=0xff75DBF7, VIOLET=0xffB38CFC,
             OUTLINE=0xff343A4B, GREEN=0xff78E9BF, ORANGE=0xffFFAF6A;
-    private static final int PICK=241, SPEECH=242;
+    private static final int PICK=241, SPEECH=242, MIC_PERMISSION=243;
     private final ExecutorService network=Executors.newSingleThreadExecutor();
     private final List<ChatLine> transcript=new ArrayList<>();
     private LinearLayout shell, messagesHost, footer, composerRow;
@@ -97,7 +103,7 @@ public final class NexusChatActivity extends Activity {
         tts.setOnUtteranceProgressListener(new UtteranceProgressListener(){
             @Override public void onStart(String id){}
             @Override public void onDone(String id){runOnUiThread(()->{
-                if(voiceMode&&currentPage.equals("chat")&&!isFinishing())listen();
+                if(voiceMode&&currentPage.equals("chat")&&!isFinishing()&&voiceDialog!=null&&voiceDialog.isShowing())new Handler(Looper.getMainLooper()).postDelayed(()->listen(),500);
             });}
             @Override public void onError(String id){runOnUiThread(()->voiceMode=false);}
         });
@@ -106,6 +112,8 @@ public final class NexusChatActivity extends Activity {
     }
     @Override protected void onDestroy(){
         voiceMode=false; if(tts!=null){tts.stop();tts.shutdown();}
+        if(speechRecognizer!=null){speechRecognizer.cancel();speechRecognizer.destroy();speechRecognizer=null;}
+        if(voiceDialog!=null)voiceDialog.dismiss();
         network.shutdownNow();super.onDestroy();
     }
     int dp(float v){return (int)(getResources().getDisplayMetrics().density*v+0.5f);}
@@ -497,19 +505,116 @@ public final class NexusChatActivity extends Activity {
             attachLabel.setText("📎 "+name+"  ×");attachLabel.setVisibility(View.VISIBLE);
         }catch(Exception ex){toast("Anexo: "+ex.getMessage());}
     }
+    void startVoiceConversation(){
+        if(!localReady&&!linked){
+            new AlertDialog.Builder(this).setTitle("Voz da NEXUS")
+                .setMessage("Ative a IA no celular para conversar por voz sem depender do PC.")
+                .setNegativeButton("Agora não",null)
+                .setPositiveButton("Ativar IA",(d,w)->setupLocal()).show();
+            return;
+        }
+        if(getPackageManager().hasSystemFeature(PackageManager.FEATURE_MICROPHONE)==false){
+            toast("Este aparelho não tem microfone disponível.");return;
+        }
+        if(Build.VERSION.SDK_INT>=23&&checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){
+            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},MIC_PERMISSION);return;
+        }
+        voiceMode=true;
+        voiceDialog=new android.app.Dialog(this);
+        LinearLayout container=vertical();container.setBackgroundColor(BACK);
+        container.setPadding(dp(24),dp(30),dp(24),dp(30));
+        voiceDialog.setContentView(container);
+        TextView top=text("NEXUS IA  •  VOZ",15,WHITE,true);
+        top.setGravity(Gravity.CENTER);container.addView(top);
+        LinearLayout.LayoutParams sp=lp(-1,0);sp.weight=1;
+        LinearLayout center=vertical();center.setGravity(Gravity.CENTER);
+        container.addView(center,sp);
+        OrbitLogo orb=new OrbitLogo();
+        LinearLayout.LayoutParams o=lp(dp(205),dp(205));o.gravity=Gravity.CENTER;
+        center.addView(orb,o);
+        addGap(center,28);
+        voiceStatus=text("Toque no centro para falar",18,WHITE,true);
+        voiceStatus.setGravity(Gravity.CENTER);center.addView(voiceStatus);
+        addGap(center,12);
+        TextView desc=text("Conversa direta, sem abrir a pesquisa do Android",13,MUTED,false);
+        desc.setGravity(Gravity.CENTER);center.addView(desc);
+        orb.setOnClickListener(v->listen());
+        TextView close=pill("Encerrar conversa",SOFT,WHITE);
+        close.setPadding(dp(20),dp(15),dp(20),dp(15));
+        close.setGravity(Gravity.CENTER);close.setOnClickListener(v->closeVoice());
+        container.addView(close,lp(-1,-2));
+        voiceDialog.setOnDismissListener(d->{
+            voiceMode=false;
+            if(speechRecognizer!=null)speechRecognizer.cancel();
+            if(tts!=null)tts.stop();voiceDialog=null;voiceStatus=null;
+        });
+        if(voiceDialog.getWindow()!=null){
+            voiceDialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+            voiceDialog.getWindow().setLayout(-1,-1);
+        }
+        voiceDialog.show();
+        voiceDialog.getWindow().setLayout(-1,-1);
+        listen();
+    }
+    void closeVoice(){
+        voiceMode=false;
+        if(speechRecognizer!=null)speechRecognizer.cancel();
+        if(tts!=null)tts.stop();
+        if(voiceDialog!=null)voiceDialog.dismiss();
+    }
+    @Override public void onRequestPermissionsResult(int request,String[] permissions,int[] results){
+        super.onRequestPermissionsResult(request,permissions,results);
+        if(request==MIC_PERMISSION){
+            if(results.length>0&&results[0]==PackageManager.PERMISSION_GRANTED)startVoiceConversation();
+            else toast("Autorize o microfone nas configurações para conversar por voz.");
+        }
+    }
+    void voiceLabel(String value){
+        if(voiceStatus!=null)voiceStatus.setText(value);
+    }
     void listen(){
-        if(working)return;
+        if(!voiceMode||working||voiceDialog==null||!voiceDialog.isShowing())return;
+        if(!SpeechRecognizer.isRecognitionAvailable(this)){
+            voiceLabel("Reconhecimento de voz indisponível neste celular");
+            return;
+        }
         try{
-            Intent i=new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE,"pt-BR");
-            i.putExtra(RecognizerIntent.EXTRA_PROMPT,"Fale com a NEXUS IA");
-            i.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE,true);
-            startActivityForResult(i,SPEECH);
-        }catch(Exception ex){voiceMode=false;
-            new AlertDialog.Builder(this).setTitle("Reconhecimento de voz indisponível")
-                .setMessage("Seu Android precisa de um serviço de reconhecimento de fala instalado e habilitado.")
-                .setPositiveButton("OK",null).show();}
+            if(speechRecognizer==null){
+                if(Build.VERSION.SDK_INT>=31&&SpeechRecognizer.isOnDeviceRecognitionAvailable(this))
+                    speechRecognizer=SpeechRecognizer.createOnDeviceSpeechRecognizer(this);
+                else speechRecognizer=SpeechRecognizer.createSpeechRecognizer(this);
+                speechRecognizer.setRecognitionListener(new RecognitionListener(){
+                    @Override public void onReadyForSpeech(Bundle params){voiceLabel("Ouvindo você...");}
+                    @Override public void onBeginningOfSpeech(){voiceLabel("Pode falar. Estou ouvindo.");}
+                    @Override public void onRmsChanged(float rms){}
+                    @Override public void onBufferReceived(byte[] buf){}
+                    @Override public void onEndOfSpeech(){voiceLabel("Entendi. Processando...");}
+                    @Override public void onError(int error){
+                        if(voiceMode)voiceLabel("Não ouvi bem. Toque no centro para tentar novamente.");
+                    }
+                    @Override public void onResults(Bundle results){
+                        ArrayList<String> heard=results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                        if(heard!=null&&!heard.isEmpty()&&voiceMode){
+                            voiceLabel("NEXUS está respondendo...");
+                            messageField.setText(heard.get(0));
+                            send();
+                        }else if(voiceMode)voiceLabel("Toque no centro para repetir.");
+                    }
+                    @Override public void onPartialResults(Bundle results){
+                        ArrayList<String> parts=results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                        if(parts!=null&&!parts.isEmpty())voiceLabel(parts.get(0));
+                    }
+                    @Override public void onEvent(int event,Bundle params){}
+                });
+            }
+            android.content.Intent intent=new android.content.Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE,"pt-BR");
+            intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE,true);
+            intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS,true);
+            voiceLabel("Preparando escuta...");
+            speechRecognizer.startListening(intent);
+        }catch(Exception e){voiceLabel("Falha no microfone: "+e.getMessage());}
     }
     void speak(String value){
         if(!speechReady||value==null||value.isEmpty())return;
