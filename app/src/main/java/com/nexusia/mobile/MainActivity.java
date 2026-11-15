@@ -18,23 +18,48 @@ import java.util.Arrays;
 import java.util.zip.*;
 
 public class MainActivity extends Activity {
-  final int bg=Color.rgb(8,13,25), card=Color.rgb(22,32,53), fg=Color.rgb(235,242,255), cyan=Color.rgb(87,223,243), purple=Color.rgb(114,82,225);
+  final int bg=0xff090B12, card=0xff171B29, fg=0xffF5F6FB, cyan=0xff75DBF7, purple=0xffB38CFC;
   LinearLayout main,stack,nav; String screen="home", current="", selected=""; EditText editor; String previous="";
   static final int EXPORT=12; File base;
   int d(int v){return (int)(v*getResources().getDisplayMetrics().density+0.5f);}
-  @Override public void onCreate(Bundle s){ super.onCreate(s);getWindow().setStatusBarColor(bg);getWindow().setNavigationBarColor(bg); base=new File(getFilesDir(),"projects");base.mkdirs();show("home"); }
-  TextView label(String value,int size,boolean strong){TextView t=new TextView(this);t.setText(value);t.setTextSize(size);t.setTextColor(fg);if(strong)t.setTypeface(null,Typeface.BOLD);t.setPadding(d(3),d(7),d(3),d(7));return t;}
-  GradientDrawable shape(int color){GradientDrawable g=new GradientDrawable();g.setColor(color);g.setCornerRadius(d(16));return g;}
+  @Override public void onCreate(Bundle s){ super.onCreate(s);getWindow().setStatusBarColor(bg);getWindow().setNavigationBarColor(bg); base=new File(getFilesDir(),"projects");base.mkdirs();show("projects"); }
+  TextView label(String value,int size,boolean strong){TextView t=new TextView(this);t.setText(value);t.setTextSize(size);t.setTextColor(fg);if(strong)t.setTypeface(Typeface.create("sans-serif-medium",Typeface.BOLD));else t.setTypeface(Typeface.create("sans-serif",Typeface.NORMAL));t.setPadding(d(3),d(7),d(3),d(7));return t;}
+  GradientDrawable shape(int color){GradientDrawable g=new GradientDrawable();g.setColor(color);g.setCornerRadius(d(18));g.setStroke(d(1),0xff343A4B);return g;}
   LinearLayout column(){LinearLayout l=new LinearLayout(this);l.setOrientation(1);return l;}
   LinearLayout panel(String title,String detail){LinearLayout p=column();p.setBackground(shape(card));p.setPadding(d(15),d(13),d(15),d(15));LinearLayout.LayoutParams par=new LinearLayout.LayoutParams(-1,-2);par.bottomMargin=d(12);stack.addView(p,par);p.addView(label(title,18,true));if(detail!=null)p.addView(label(detail,13,false));return p;}
-  void button(LinearLayout parent,String title,Runnable work){Button b=new Button(this);b.setText(title);b.setAllCaps(false);b.setTextColor(fg);b.setBackground(shape(purple));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.topMargin=d(9);parent.addView(b,lp);b.setOnClickListener(v->work.run());}
+  void button(LinearLayout parent,String title,Runnable work){Button b=new Button(this);b.setText(title);b.setAllCaps(false);b.setTextColor(fg);b.setBackground(shape(0xff22283B));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.topMargin=d(9);parent.addView(b,lp);b.setOnClickListener(v->work.run());}
   EditText input(LinearLayout parent,String hint,String value,boolean multiline){EditText e=new EditText(this);e.setText(value);e.setHint(hint);e.setHintTextColor(0xffa0b1cc);e.setTextColor(fg);e.setTextSize(14);e.setBackground(shape(0xff121d33));e.setPadding(d(12),d(12),d(12),d(12));if(multiline){e.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE|InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);e.setGravity(Gravity.TOP);e.setMinLines(12);}parent.addView(e,new LinearLayout.LayoutParams(-1,-2));return e;}
-  void show(String name){screen=name;main=column();main.setBackgroundColor(bg);setContentView(main);TextView brand=label("◆ NEXUS IA",27,true);brand.setTextColor(cyan);brand.setPadding(d(20),d(20),d(10),d(6));main.addView(brand);TextView sub=label("GAME STUDIO   •   CODE STUDIO",12,true);sub.setPadding(d(20),0,0,d(12));main.addView(sub);
-    ScrollView scroll=new ScrollView(this);main.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));stack=column();stack.setPadding(d(16),d(12),d(16),d(20));scroll.addView(stack);
-    if(name.equals("home"))home();else if(name.equals("projects"))projects();else if(name.equals("project"))project();else if(name.equals("editor"))edit();else if(name.equals("agents"))agents();
-    TextView foot=label("Projetos locais • armazenamento privado do aplicativo",11,false);foot.setPadding(d(15),d(5),0,d(8));main.addView(foot);
-    nav=new LinearLayout(this);nav.setPadding(d(6),d(7),d(6),d(9));nav.setBackgroundColor(card);main.addView(nav);
-    tab("Início","home");tab("Projetos","projects");tab("Agentes","agents");
+  void show(String name){
+    screen=name;main=column();main.setBackgroundColor(bg);setContentView(main);
+    LinearLayout head=new LinearLayout(this);head.setGravity(Gravity.CENTER_VERTICAL);
+    head.setPadding(d(15),d(8),d(15),d(8));main.addView(head,new LinearLayout.LayoutParams(-1,d(66)));
+    TextView back=label("‹",32,false);back.setTextColor(cyan);back.setGravity(Gravity.CENTER);
+    head.addView(back,new LinearLayout.LayoutParams(d(37),d(47)));
+    back.setOnClickListener(v->leave(()->{if(screen.equals("editor"))show("project");
+      else if(screen.equals("project"))show("projects");else finish();}));
+    ImageView logo=new ImageView(this);
+    logo.setImageResource(R.drawable.nexus_icon);
+    logo.setScaleType(ImageView.ScaleType.CENTER_CROP);
+    head.addView(logo,new LinearLayout.LayoutParams(d(42),d(42)));
+    LinearLayout title=column();
+    LinearLayout.LayoutParams n=new LinearLayout.LayoutParams(0,-2,1);n.leftMargin=d(10);
+    head.addView(title,n);
+    TextView brand=label("NEXUS IA",18,true);brand.setPadding(0,0,0,0);title.addView(brand);
+    TextView sub=label("STUDIO  •  PROJETOS",11,false);
+    sub.setTextColor(0xffA8AEC0);sub.setPadding(0,0,0,0);title.addView(sub);
+    View sep=new View(this);sep.setBackgroundColor(0xff232633);
+    main.addView(sep,new LinearLayout.LayoutParams(-1,d(1)));
+    ScrollView scroll=new ScrollView(this);
+    scroll.setVerticalScrollBarEnabled(false);
+    main.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+    stack=column();stack.setPadding(d(17),d(18),d(17),d(18));scroll.addView(stack);
+    if(name.equals("home")||name.equals("projects"))projects();
+    else if(name.equals("project"))project();
+    else if(name.equals("editor"))edit();
+    else if(name.equals("agents"))agents();
+    TextView foot=label("Arquivos salvos neste dispositivo",11,false);
+    foot.setTextColor(0xffA8AEC0);foot.setGravity(Gravity.CENTER);
+    main.addView(foot,new LinearLayout.LayoutParams(-1,d(40)));
   }
   void tab(String s,String dest){Button b=new Button(this);b.setText(s);b.setTextSize(12);b.setAllCaps(false);b.setTextColor(screen.equals(dest)?cyan:fg);b.setBackground(shape(card));nav.addView(b,new LinearLayout.LayoutParams(0,d(45),1));b.setOnClickListener(v->leave(()->show(dest)));}
   void home(){LinearLayout hero=panel("NEXUS COMMAND CENTER","Uma oficina de projetos para o seu Android.");TextView txt=label("Crie jogos. Programe. Evolua.",21,true);txt.setTextColor(cyan);hero.addView(txt);button(hero,"Criar projeto",()->create());panel("Game Studio","Crie a estrutura de jogos Godot com scripts e arquivos editáveis.");panel("Code Studio","Crie projetos Python e web, edite código e exporte arquivos.");panel("NEXUS IA local","Nesta versão Android, o editor funciona offline. Modelos de IA pesados e execução do NEXUS SWARM dependem do aplicativo desktop e de uma integração futura.");}
