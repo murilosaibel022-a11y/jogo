@@ -1,0 +1,579 @@
+package com.nexusia.mobile;
+
+import android.animation.ValueAnimator;
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
+import android.database.Cursor;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.RectF;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
+import android.provider.OpenableColumns;
+import android.speech.RecognizerIntent;
+import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
+import android.text.InputType;
+import android.text.TextUtils;
+import android.util.Base64;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.WindowInsets;
+import android.view.WindowManager;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+/** NEXUS IA: conversa integrada. Os modelos nunca são escolhidos manualmente no Android. */
+public final class NexusChatActivity extends Activity {
+    private static final int BACK=0xff070C18, SURFACE=0xff111A2C, SOFT=0xff1B2940,
+            WHITE=0xffEAF2FF, MUTED=0xff97A7C7, CYAN=0xff5BE4EC, VIOLET=0xff9C83FF,
+            OUTLINE=0xff293756, GREEN=0xff7DECC8;
+    private static final int PICK=241, SPEECH=242;
+    private final ExecutorService network=Executors.newSingleThreadExecutor();
+    private final List<ChatLine> transcript=new ArrayList<>();
+    private LinearLayout shell, messagesHost, footer, composerRow;
+    private ScrollView scroller;
+    private EditText messageField;
+    private TextView stateLabel, attachLabel;
+    private SharedPreferences settings;
+    private SecretStore pairing;
+    private TextToSpeech tts;
+    private boolean speechReady=false, voiceMode=false, working=false, linked=false;
+    private String projectId="", pendingName="", pendingMime="", pendingContent="", pendingBase64="";
+    private String currentPage="chat";
+    private OrbitLogo logo;
+    private int messageSerial=0;
+    private static class ChatLine {
+        final String role,text;
+        ChatLine(String r,String t){role=r;text=t;}
+    }
+    interface Callback{void ok(JSONObject obj);}
+    @Override public void onCreate(Bundle state){
+        super.onCreate(state);
+        getWindow().setStatusBarColor(BACK);getWindow().setNavigationBarColor(BACK);
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        settings=getSharedPreferences("nexus_assistant",MODE_PRIVATE);
+        pairing=new SecretStore(this);
+        restoreTranscript();
+        tts=new TextToSpeech(this, status->{
+            speechReady=status==TextToSpeech.SUCCESS;
+            if(speechReady)tts.setLanguage(new Locale("pt","BR"));
+        });
+        tts.setOnUtteranceProgressListener(new UtteranceProgressListener(){
+            @Override public void onStart(String id){}
+            @Override public void onDone(String id){runOnUiThread(()->{
+                if(voiceMode&&currentPage.equals("chat")&&!isFinishing())listen();
+            });}
+            @Override public void onError(String id){runOnUiThread(()->voiceMode=false);}
+        });
+        showChat();
+        if(!pairing.host().isEmpty()) connectStored();
+    }
+    @Override protected void onDestroy(){
+        voiceMode=false; if(tts!=null){tts.stop();tts.shutdown();}
+        network.shutdownNow();super.onDestroy();
+    }
+    int dp(float v){return (int)(getResources().getDisplayMetrics().density*v+0.5f);}
+    GradientDrawable rounded(int fill,int stroke,int radius){
+        GradientDrawable b=new GradientDrawable();b.setColor(fill);b.setCornerRadius(dp(radius));
+        if(stroke!=0)b.setStroke(dp(1),stroke);return b;
+    }
+    GradientDrawable gradient(int a,int b,int radius){
+        GradientDrawable d=new GradientDrawable(GradientDrawable.Orientation.TL_BR,new int[]{a,b});
+        d.setCornerRadius(dp(radius));return d;
+    }
+    LinearLayout vertical(){LinearLayout l=new LinearLayout(this);l.setOrientation(1);return l;}
+    TextView text(String s,int size,int color,boolean bold){
+        TextView t=new TextView(this);t.setText(s);t.setTextSize(size);t.setTextColor(color);
+        t.setTypeface(Typeface.create(bold?"sans-serif-medium":"sans-serif",bold?Typeface.BOLD:Typeface.NORMAL));
+        t.setLineSpacing(dp(3),1.05f);return t;
+    }
+    LinearLayout.LayoutParams lp(int w,int h){return new LinearLayout.LayoutParams(w,h);}
+    void addGap(LinearLayout parent,int size){View v=new View(this);parent.addView(v,lp(1,dp(size)));}
+    void appear(View v,int delay){
+        v.setAlpha(0);v.setTranslationY(dp(12));
+        v.animate().alpha(1).translationY(0).setStartDelay(delay).setDuration(320).start();
+    }
+    TextView pill(String label,int bg,int fg){
+        TextView v=text(label,12,fg,true);v.setGravity(Gravity.CENTER);
+        v.setPadding(dp(12),dp(7),dp(12),dp(7));v.setBackground(rounded(bg,0,30));return v;
+    }
+    TextView tap(String symbol,int size,Runnable task){
+        TextView v=text(symbol,size,WHITE,true);v.setGravity(Gravity.CENTER);
+        v.setBackground(rounded(SOFT,OUTLINE,16));v.setOnClickListener(x->task.run());
+        return v;
+    }
+    void base(String title,String sub){
+        shell=vertical();shell.setBackgroundColor(BACK);setContentView(shell);
+        if(Build.VERSION.SDK_INT>=35){
+            shell.setOnApplyWindowInsetsListener((v,insets)->{
+                android.graphics.Insets i=insets.getInsets(WindowInsets.Type.systemBars());
+                v.setPadding(i.left,i.top,i.right,i.bottom);
+                return insets;
+            });
+        }
+        LinearLayout head=new LinearLayout(this);head.setGravity(Gravity.CENTER_VERTICAL);
+        head.setPadding(dp(17),dp(12),dp(17),dp(10));
+        shell.addView(head,lp(-1,dp(76)));
+        logo=new OrbitLogo();head.addView(logo,lp(dp(48),dp(48)));
+        LinearLayout names=vertical();
+        LinearLayout.LayoutParams np=new LinearLayout.LayoutParams(0,-2,1);
+        np.leftMargin=dp(13);head.addView(names,np);
+        names.addView(text(title,21,WHITE,true));
+        stateLabel=text(sub,12,MUTED,false);names.addView(stateLabel);
+        TextView setting=tap("⚙",22,()->showConnection());
+        head.addView(setting,lp(dp(46),dp(46)));
+    }
+    void bottom(String selected){
+        LinearLayout bar=new LinearLayout(this);bar.setPadding(dp(12),dp(7),dp(12),dp(8));
+        bar.setBackgroundColor(SURFACE);shell.addView(bar,lp(-1,dp(65)));
+        nav(bar,"◉","Conversa","chat",selected,()->showChat());
+        nav(bar,"◈","Studio","studio",selected,()->{
+            voiceMode=false;if(tts!=null)tts.stop();
+            startActivity(new Intent(this,MainActivity.class));
+        });
+        nav(bar,"⌁","Conexão","connect",selected,()->showConnection());
+    }
+    void nav(LinearLayout row,String icon,String label,String id,String selected,Runnable click){
+        LinearLayout item=vertical();item.setGravity(Gravity.CENTER);
+        row.addView(item,new LinearLayout.LayoutParams(0,-1,1));
+        TextView symbol=text(icon,22,selected.equals(id)?CYAN:MUTED,true);
+        symbol.setGravity(Gravity.CENTER);item.addView(symbol);
+        TextView name=text(label,11,selected.equals(id)?WHITE:MUTED,selected.equals(id));
+        name.setGravity(Gravity.CENTER);item.addView(name);
+        item.setOnClickListener(v->click.run());
+    }
+    void showChat(){
+        currentPage="chat";
+        base("NEXUS IA",linked?"● Conectada • assistente unificado":"● Modo local • conecte o PC para IA");
+        ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);scroll.setVerticalScrollBarEnabled(false);
+        shell.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));scroller=scroll;
+        messagesHost=vertical();messagesHost.setPadding(dp(16),dp(12),dp(16),dp(20));
+        scroll.addView(messagesHost,new ScrollView.LayoutParams(-1,-2));
+        if(transcript.isEmpty())welcome();
+        else for(ChatLine line:transcript) addBubble(line.role,line.text,false);
+        footer=vertical();footer.setPadding(dp(12),dp(7),dp(12),dp(11));
+        footer.setBackgroundColor(BACK);shell.addView(footer,lp(-1,-2));
+        attachLabel=text("",12,CYAN,false);
+        if(!pendingName.isEmpty()){attachLabel.setText("📎 "+pendingName+"   ×");}
+        attachLabel.setVisibility(pendingName.isEmpty()?View.GONE:View.VISIBLE);
+        attachLabel.setPadding(dp(13),dp(6),0,dp(9));
+        attachLabel.setOnClickListener(v->clearAttachment());
+        footer.addView(attachLabel);
+        composerRow=new LinearLayout(this);composerRow.setGravity(Gravity.CENTER_VERTICAL);
+        composerRow.setBackground(rounded(SURFACE,OUTLINE,24));
+        composerRow.setPadding(dp(8),dp(8),dp(8),dp(8));footer.addView(composerRow);
+        TextView file=tap("+",25,()->pickAttachment());file.setBackground(rounded(SOFT,0,16));
+        composerRow.addView(file,lp(dp(44),dp(46)));
+        messageField=new EditText(this);
+        messageField.setTextColor(WHITE);messageField.setHintTextColor(MUTED);
+        messageField.setTextSize(15);messageField.setHint("Mensagem para NEXUS...");
+        messageField.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE|
+                InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        messageField.setBackgroundColor(Color.TRANSPARENT);
+        messageField.setMinHeight(dp(46));messageField.setMaxLines(5);
+        messageField.setPadding(dp(12),0,dp(5),0);
+        composerRow.addView(messageField,new LinearLayout.LayoutParams(0,-2,1));
+        TextView mic=tap("♬",20,()->listen());mic.setContentDescription("Falar mensagem");
+        mic.setBackground(rounded(SOFT,0,16));composerRow.addView(mic,lp(dp(42),dp(46)));
+        TextView send=tap("➤",23,()->send());
+        send.setContentDescription("Enviar mensagem");send.setBackground(gradient(VIOLET,0xff685AE7,16));
+        LinearLayout.LayoutParams sp=lp(dp(47),dp(46));sp.leftMargin=dp(6);composerRow.addView(send,sp);
+        LinearLayout extras=new LinearLayout(this);extras.setGravity(Gravity.CENTER_VERTICAL);
+        extras.setPadding(dp(6),dp(9),dp(6),0);footer.addView(extras);
+        TextView talk=pill(voiceMode?"◉ Modo voz ativo":"◯ Modo voz",voiceMode?0xff263B50:SOFT,voiceMode?CYAN:MUTED);
+        talk.setOnClickListener(v->{voiceMode=!voiceMode;if(voiceMode)listen();else if(tts!=null)tts.stop();showChat();});
+        extras.addView(talk);
+        TextView small=text("  •  Voz, texto e anexos em um só chat",11,MUTED,false);
+        extras.addView(small);
+        bottom("chat");
+        scrollBottom();
+    }
+    void welcome(){
+        LinearLayout intro=vertical();intro.setGravity(Gravity.CENTER);
+        intro.setPadding(dp(18),dp(40),dp(18),dp(26));
+        messagesHost.addView(intro);
+        OrbitLogo big=new OrbitLogo();LinearLayout.LayoutParams bp=lp(dp(90),dp(90));bp.gravity=Gravity.CENTER;
+        intro.addView(big,bp);
+        addGap(intro,dp(2));
+        TextView headline=text("Inteligência para criar.",27,WHITE,true);
+        headline.setGravity(Gravity.CENTER);intro.addView(headline);
+        TextView second=text("Ideias que ganham vida.",24,CYAN,true);
+        second.setGravity(Gravity.CENTER);intro.addView(second);
+        TextView desc=text("Uma conversa. Um assistente.\nProjetos, código e criatividade no mesmo lugar.",14,MUTED,false);
+        desc.setGravity(Gravity.CENTER);desc.setPadding(0,dp(11),0,dp(18));intro.addView(desc);
+        appear(intro,0);
+        if(!linked){
+            LinearLayout box=vertical();box.setPadding(dp(18),dp(17),dp(18),dp(17));
+            box.setBackground(gradient(0xff192944,0xff211E41,22));
+            LinearLayout.LayoutParams p=lp(-1,-2);p.topMargin=dp(4);messagesHost.addView(box,p);
+            box.addView(text("✧ Ative a inteligência",16,WHITE,true));addGap(box,6);
+            box.addView(text("O editor funciona no celular. Para respostas reais, conecte a NEXUS ao seu PC com um modelo de IA instalado.",13,MUTED,false));
+            addGap(box,12);
+            TextView connect=pill("Conectar meu computador  ↗",0xff32426D,WHITE);
+            connect.setOnClickListener(v->showConnection());box.addView(connect);
+            appear(box,100);
+        }
+    }
+    void addBubble(String role,String content,boolean animate){
+        boolean mine=role.equals("user"),system=role.equals("system");
+        LinearLayout row=new LinearLayout(this);row.setGravity(mine?Gravity.RIGHT:Gravity.LEFT);
+        LinearLayout.LayoutParams rp=lp(-1,-2);rp.bottomMargin=dp(15);
+        messagesHost.addView(row,rp);
+        LinearLayout bubble=vertical();bubble.setPadding(dp(16),dp(13),dp(16),dp(13));
+        bubble.setBackground(rounded(mine?0xff292451:(system?0xff172238:SURFACE),
+                mine?0xff413675:OUTLINE,20));
+        row.addView(bubble,new LinearLayout.LayoutParams(-2,-2));
+        TextView who=text(mine?"VOCÊ":system?"SISTEMA":"✧ NEXUS",10,mine?0xffC2B8FF:CYAN,true);
+        bubble.addView(who);addGap(bubble,5);
+        TextView t=text(content,15,WHITE,false);t.setMaxWidth(dp(310));t.setTextIsSelectable(true);
+        bubble.addView(t);
+        if(!mine&&!system){
+            TextView replay=text("Ouvir  ♬",12,CYAN,true);replay.setGravity(Gravity.RIGHT);
+            LinearLayout.LayoutParams play=lp(-1,dp(26));play.topMargin=dp(7);
+            bubble.addView(replay,play);replay.setOnClickListener(v->speak(content));
+        }
+        if(animate)appear(row,0);
+        scrollBottom();
+    }
+    void scrollBottom(){if(scroller!=null)scroller.post(()->scroller.fullScroll(View.FOCUS_DOWN));}
+    void persistTranscript(){
+        JSONArray arr=new JSONArray();
+        int from=Math.max(0,transcript.size()-60);
+        for(int i=from;i<transcript.size();i++){ChatLine m=transcript.get(i);
+            JSONObject j=new JSONObject();try{j.put("role",m.role);j.put("content",m.text);}catch(Exception ignored){}
+            arr.put(j);
+        }
+        settings.edit().putString("history",arr.toString()).apply();
+    }
+    void restoreTranscript(){
+        try{JSONArray arr=new JSONArray(settings.getString("history","[]"));
+            for(int i=0;i<arr.length();i++){JSONObject o=arr.optJSONObject(i);
+                if(o!=null)transcript.add(new ChatLine(o.optString("role"),o.optString("content")));}
+        }catch(Exception ignored){}
+    }
+    void record(String role,String content){
+        transcript.add(new ChatLine(role,content));persistTranscript();
+        if(currentPage.equals("chat"))addBubble(role,content,true);
+    }
+    void setStatus(String s){if(stateLabel!=null)stateLabel.setText(s);}
+    void startBusy(){
+        working=true;setStatus("✧ NEXUS está pensando...");
+        if(currentPage.equals("chat")){
+            TextView loading=pill("✧ Preparando resposta  • • •",SURFACE,CYAN);
+            messagesHost.addView(loading);
+            loading.setTag("loading");loading.animate().alpha(0.4f).setDuration(700).withEndAction(()->{
+                if(working&&loading.getParent()!=null)loading.animate().alpha(1).setDuration(700).start();
+            }).start();scrollBottom();
+        }
+    }
+    void stopBusy(){
+        working=false;setStatus(linked?"● Conectada • pronta para conversar":"● Sem conexão com modelo");
+        if(messagesHost!=null){for(int i=messagesHost.getChildCount()-1;i>=0;i--){
+            View x=messagesHost.getChildAt(i);if("loading".equals(x.getTag()))messagesHost.removeViewAt(i);
+        }}
+    }
+    void send(){
+        if(working)return;
+        String value=messageField.getText().toString().trim();
+        if(value.isEmpty()&&pendingName.isEmpty())return;
+        if(!linked||projectId.isEmpty()){
+            if(!value.isEmpty())messageField.setText(value);
+            new AlertDialog.Builder(this).setTitle("IA ainda não conectada")
+                .setMessage("Para responder com inteligência artificial, conecte o NEXUS Companion do PC. Seus arquivos locais continuam acessíveis no Studio.")
+                .setNegativeButton("Agora não",null).setPositiveButton("Conectar",(d,w)->showConnection()).show();
+            return;
+        }
+        String display=value.isEmpty()?"📎 "+pendingName:value;
+        if(!pendingName.isEmpty())display+="\n📎 "+pendingName;
+        record("user",display);messageField.setText("");
+        final String request=value,filename=pendingName,mime=pendingMime,content=pendingContent,image=pendingBase64;
+        clearAttachment();startBusy();
+        network.execute(()->{
+            try{
+                JSONObject data=new JSONObject();data.put("message",request.isEmpty()?"Analise o anexo enviado.":request);
+                if(!filename.isEmpty()){
+                    JSONArray arr=new JSONArray();JSONObject file=new JSONObject();
+                    file.put("name",filename);file.put("mime",mime);
+                    if(!image.isEmpty())file.put("base64",image);
+                    else file.put("text",content);
+                    arr.put(file);data.put("attachments",arr);
+                }
+                JSONObject result=api("POST","/api/projects/"+projectId+"/chat",data);
+                String reply=result.optString("reply","");
+                runOnUiThread(()->{stopBusy();record("assistant",reply.isEmpty()?"O modelo não retornou texto.":reply);
+                    if(voiceMode)speak(reply);});
+            }catch(Exception ex){runOnUiThread(()->{
+                stopBusy();record("system","Não consegui obter uma resposta: "+ex.getMessage());
+                voiceMode=false;});}
+        });
+    }
+    void clearAttachment(){
+        pendingName="";pendingMime="";pendingContent="";pendingBase64="";
+        if(attachLabel!=null){attachLabel.setVisibility(View.GONE);attachLabel.setText("");}
+    }
+    void pickAttachment(){
+        Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        startActivityForResult(i,PICK);
+    }
+    void attach(Uri uri){
+        try{
+            String name="arquivo";String mime=getContentResolver().getType(uri);
+            try(Cursor c=getContentResolver().query(uri,new String[]{OpenableColumns.DISPLAY_NAME},null,null,null)){
+                if(c!=null&&c.moveToFirst())name=c.getString(0);
+            }
+            String lower=name.toLowerCase(Locale.ROOT);
+            boolean image=(mime!=null&&mime.startsWith("image/"));
+            boolean textFile=(mime!=null&&(mime.startsWith("text/")||mime.contains("json")||mime.contains("xml")))
+                    ||lower.matches(".*\\.(py|gd|js|ts|tsx|jsx|lua|rs|java|cs|cpp|h|md|txt|html|css|json|yaml|yml|xml|sql|log|csv)$");
+            if(!image&&!textFile){
+                new AlertDialog.Builder(this).setTitle("Arquivo ainda não suportado")
+                    .setMessage("Esta versão aceita imagens e arquivos de texto/código. PDFs e outros formatos exigem um extrator adicional.")
+                    .setPositiveButton("OK",null).show();return;
+            }
+            ByteArrayOutputStream buf=new ByteArrayOutputStream();
+            try(InputStream stream=getContentResolver().openInputStream(uri)){
+                if(stream==null)throw new Exception("Arquivo inacessível");
+                byte[] chunk=new byte[8192];int n;
+                while((n=stream.read(chunk))!=-1){
+                    if(buf.size()+n>(image?1_250_000:48_000))throw new Exception("Arquivo grande demais (imagem: 1,25 MB; texto: 48 KB)");
+                    buf.write(chunk,0,n);
+                }
+            }
+            pendingName=name;pendingMime=mime==null?(image?"image/jpeg":"text/plain"):mime;
+            if(image)pendingBase64=Base64.encodeToString(buf.toByteArray(),Base64.NO_WRAP);
+            else pendingContent=new String(buf.toByteArray(),StandardCharsets.UTF_8);
+            attachLabel.setText("📎 "+name+"  ×");attachLabel.setVisibility(View.VISIBLE);
+        }catch(Exception ex){toast("Anexo: "+ex.getMessage());}
+    }
+    void listen(){
+        if(working)return;
+        try{
+            Intent i=new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE,"pt-BR");
+            i.putExtra(RecognizerIntent.EXTRA_PROMPT,"Fale com a NEXUS IA");
+            startActivityForResult(i,SPEECH);
+        }catch(Exception ex){voiceMode=false;
+            new AlertDialog.Builder(this).setTitle("Reconhecimento de voz indisponível")
+                .setMessage("Seu Android precisa de um serviço de reconhecimento de fala instalado e habilitado.")
+                .setPositiveButton("OK",null).show();}
+    }
+    void speak(String value){
+        if(!speechReady||value==null||value.isEmpty())return;
+        tts.speak(value,TextToSpeech.QUEUE_FLUSH,null,"nexus_reply_"+(++messageSerial));
+    }
+    @Override protected void onActivityResult(int request,int result,Intent data){
+        super.onActivityResult(request,result,data);
+        if(result!=RESULT_OK){if(request==SPEECH)voiceMode=false;return;}
+        if(request==PICK&&data!=null&&data.getData()!=null)attach(data.getData());
+        if(request==SPEECH&&data!=null){
+            ArrayList<String> options=data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
+            if(options!=null&&!options.isEmpty()&&currentPage.equals("chat")){
+                messageField.setText(options.get(0));send();
+            }else voiceMode=false;
+        }
+    }
+    void toast(String s){Toast.makeText(this,s,Toast.LENGTH_LONG).show();}
+    void showConnection(){
+        voiceMode=false;currentPage="connect";
+        base("NEXUS Link","Conexão segura por pareamento • Wi-Fi local");
+        ScrollView scroll=new ScrollView(this);shell.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+        LinearLayout body=vertical();body.setPadding(dp(20),dp(22),dp(20),dp(20));scroll.addView(body);
+        TextView title=text("Uma IA. Seus dispositivos.",27,WHITE,true);body.addView(title);
+        addGap(body,10);
+        body.addView(text("Seu computador executa os modelos e os agentes. O celular é a interface de conversa, voz e criação.",15,MUTED,false));
+        addGap(body,23);
+        LinearLayout card=vertical();card.setPadding(dp(19),dp(18),dp(19),dp(19));
+        card.setBackground(rounded(SURFACE,OUTLINE,24));body.addView(card);
+        card.addView(text("Conectar ao NEXUS Companion",18,WHITE,true));addGap(card,11);
+        EditText host=new EditText(this);styleInput(host,"IP do PC:porta, ex.: 192.168.1.20:8877",pairing.host());
+        card.addView(host,lp(-1,dp(56)));addGap(card,11);
+        EditText key=new EditText(this);styleInput(key,"Código de pareamento","");
+        key.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        card.addView(key,lp(-1,dp(56)));addGap(card,17);
+        TextView connect=pill("Conectar agora",0xff5342B5,WHITE);connect.setPadding(dp(18),dp(15),dp(18),dp(15));
+        connect.setOnClickListener(v->{
+            String h=host.getText().toString().trim(),t=key.getText().toString().trim();
+            if(!safeAddress(h)||t.length()<20){toast("Confira o IP privado e o código de pareamento.");return;}
+            setStatus("Conectando...");
+            network.execute(()->{
+                try{
+                    JSONObject ok=apiWith(h,t,"GET","/api/health",null);
+                    pairing.setHost(h);pairing.saveToken(t);
+                    String pid=ensureProject(h,t);autoModel(h,t);
+                    projectId=pid;linked=true;
+                    runOnUiThread(()->{toast("NEXUS conectada.");showChat();});
+                    syncHistory();
+                }catch(Exception ex){runOnUiThread(()->toast("Conexão: "+ex.getMessage()));}
+            });
+        });card.addView(connect);
+        addGap(body,14);
+        body.addView(text("No PC: execute python -m nexus.mobile_bridge --lan e copie o endereço e código exibidos.",13,MUTED,false));
+        addGap(body,15);
+        body.addView(text("Privacidade: o Companion usa HTTP na rede local. Conecte apenas a redes Wi-Fi confiáveis; não exponha sua porta à internet.",12,0xffDCCB9B,false));
+        if(linked){
+            addGap(body,15);
+            TextView disconnect=pill("Desconectar dispositivo",SOFT,WHITE);
+            disconnect.setOnClickListener(v->{pairing.clear();linked=false;projectId="";showConnection();});
+            body.addView(disconnect);
+        }
+        bottom("connect");
+    }
+    void styleInput(EditText edit,String hint,String value){
+        edit.setTextColor(WHITE);edit.setHintTextColor(MUTED);edit.setTextSize(14);
+        edit.setHint(hint);edit.setText(value);edit.setSingleLine(true);
+        edit.setPadding(dp(15),0,dp(12),0);edit.setBackground(rounded(0xff0B1222,OUTLINE,14));
+    }
+    boolean safeAddress(String raw){
+        if(!raw.matches("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}:[0-9]{2,5}"))return false;
+        try{
+            String[] parts=raw.split(":");int port=Integer.parseInt(parts[1]);
+            if(port<1||port>65535)return false;
+            String[] octets=parts[0].split("\\.");int[] a=new int[4];
+            for(int i=0;i<4;i++){a[i]=Integer.parseInt(octets[i]);if(a[i]>255)return false;}
+            return a[0]==10||a[0]==192&&a[1]==168||a[0]==172&&a[1]>=16&&a[1]<=31;
+        }catch(Exception e){return false;}
+    }
+    JSONObject api(String verb,String path,JSONObject data)throws Exception{
+        return apiWith(pairing.host(),pairing.token(),verb,path,data);
+    }
+    JSONObject apiWith(String host,String token,String verb,String path,JSONObject data)throws Exception{
+        if(!safeAddress(host)||!path.startsWith("/api/"))throw new Exception("Endereço não permitido.");
+        HttpURLConnection connection=(HttpURLConnection)new URL("http://"+host+path).openConnection();
+        connection.setConnectTimeout(8500);connection.setReadTimeout(path.endsWith("/chat")?305000:18000);
+        connection.setRequestMethod(verb);connection.setRequestProperty("Authorization","Bearer "+token);
+        connection.setRequestProperty("Accept","application/json");connection.setUseCaches(false);
+        if(data!=null){connection.setDoOutput(true);connection.setRequestProperty("Content-Type","application/json; charset=utf-8");
+            byte[] bytes=data.toString().getBytes(StandardCharsets.UTF_8);
+            try(java.io.OutputStream out=connection.getOutputStream()){out.write(bytes);}
+        }
+        try{
+            int code=connection.getResponseCode();
+            InputStream raw=code>=400?connection.getErrorStream():connection.getInputStream();
+            if(raw==null)throw new Exception("Servidor sem resposta.");
+            ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[8192];int n;
+            try(InputStream in=raw){while((n=in.read(b))>=0){
+                if(out.size()+n>5_000_000)throw new Exception("Resposta muito grande");
+                out.write(b,0,n);
+            }}
+            JSONObject result=new JSONObject(out.toString("UTF-8"));
+            if(code>=400)throw new Exception(result.optString("error","Erro HTTP "+code));
+            return result;
+        }finally{connection.disconnect();}
+    }
+    String ensureProject(String host,String token)throws Exception{
+        JSONObject out=apiWith(host,token,"GET","/api/projects",null);
+        JSONArray arr=out.optJSONArray("projects");
+        if(arr!=null)for(int i=0;i<arr.length();i++){
+            JSONObject item=arr.optJSONObject(i);
+            if(item!=null&&"NEXUS Conversas".equals(item.optString("name")))return item.optString("id");
+        }
+        JSONObject create=new JSONObject();create.put("name","NEXUS Conversas");create.put("kind","code");
+        JSONObject j=apiWith(host,token,"POST","/api/projects",create);
+        return j.getJSONObject("project").getString("id");
+    }
+    void autoModel(String host,String token)throws Exception{
+        JSONObject conf=apiWith(host,token,"GET","/api/config",null);
+        JSONArray options=conf.optJSONArray("available");
+        if(options==null||options.length()==0)throw new Exception("Instale um modelo no Ollama do PC.");
+        String top=options.optString(0),current=conf.optString("model","");
+        int best=-10000;
+        for(int i=0;i<options.length();i++){
+            String m=options.optString(i);String n=m.toLowerCase(Locale.ROOT);int rank=0;
+            if(n.contains("qwen"))rank+=30;if(n.contains("llama"))rank+=23;
+            if(n.contains("gemma"))rank+=19;if(n.contains("coder"))rank+=8;
+            if(n.contains("vision")||n.contains("vl"))rank+=6;
+            if(n.contains("1b")||n.contains("0.5b"))rank-=16;
+            if(n.contains("3b")||n.contains("4b"))rank+=7;
+            if(n.contains("70b")||n.contains("32b"))rank-=15;
+            if(rank>best){best=rank;top=m;}
+        }
+        if(!top.equals(current)){JSONObject set=new JSONObject();set.put("model",top);
+            apiWith(host,token,"PUT","/api/config",set);}
+    }
+    void connectStored(){
+        network.execute(()->{
+            try{
+                api("GET","/api/health",null);
+                projectId=ensureProject(pairing.host(),pairing.token());
+                autoModel(pairing.host(),pairing.token());
+                linked=true;runOnUiThread(()->{if(currentPage.equals("chat"))showChat();});
+                syncHistory();
+            }catch(Exception ex){linked=false;runOnUiThread(()->{
+                if(currentPage.equals("chat"))setStatus("● PC indisponível • toque em ⚙");
+            });}
+        });
+    }
+    void syncHistory(){
+        try{
+            JSONObject j=api("GET","/api/projects/"+projectId+"/messages",null);
+            JSONArray messages=j.optJSONArray("messages");if(messages==null)return;
+            ArrayList<ChatLine> fromPc=new ArrayList<>();
+            int start=Math.max(0,messages.length()-45);
+            for(int i=start;i<messages.length();i++){
+                JSONObject m=messages.optJSONObject(i);if(m==null)continue;
+                String role=m.optString("role");if(role.equals("user")||role.equals("assistant"))
+                    fromPc.add(new ChatLine(role,m.optString("content")));
+            }
+            if(!fromPc.isEmpty())runOnUiThread(()->{
+                if(working)return;transcript.clear();transcript.addAll(fromPc);
+                persistTranscript();if(currentPage.equals("chat"))showChat();
+            });
+        }catch(Exception ignored){}
+    }
+    private final class OrbitLogo extends View {
+        final Paint paint=new Paint(3);final RectF arc=new RectF();float rotation=0;
+        final ValueAnimator animator=ValueAnimator.ofFloat(0f,360f);
+        OrbitLogo(){
+            super(NexusChatActivity.this);setLayerType(View.LAYER_TYPE_SOFTWARE,null);
+            animator.setDuration(13000);animator.setRepeatCount(ValueAnimator.INFINITE);
+            animator.setInterpolator(new android.view.animation.LinearInterpolator());
+            animator.addUpdateListener(a->{rotation=(float)a.getAnimatedValue();invalidate();});animator.start();
+        }
+        @Override protected void onDraw(Canvas c){
+            super.onDraw(c);float size=Math.min(getWidth(),getHeight()),cx=getWidth()/2f,cy=getHeight()/2f;
+            c.save();c.translate(cx,cy);c.rotate(rotation);
+            paint.setStyle(Paint.Style.STROKE);paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeWidth(size*0.055f);
+            arc.set(-size*.38f,-size*.38f,size*.38f,size*.38f);
+            paint.setColor(CYAN);c.drawArc(arc,12,145,false,paint);
+            paint.setColor(VIOLET);c.drawArc(arc,193,142,false,paint);
+            paint.setStrokeWidth(size*.035f);arc.set(-size*.27f,-size*.27f,size*.27f,size*.27f);
+            paint.setColor(0xffA4B6FF);c.drawArc(arc,90,155,false,paint);
+            c.restore();paint.setStyle(Paint.Style.FILL);
+            paint.setShader(new android.graphics.RadialGradient(cx-size*.04f,cy-size*.07f,size*.22f,
+                new int[]{0xffB8FFFF,CYAN,0xff5C54D6},null,android.graphics.Shader.TileMode.CLAMP));
+            c.drawCircle(cx,cy,size*.16f,paint);paint.setShader(null);
+        }
+        @Override protected void onDetachedFromWindow(){animator.cancel();super.onDetachedFromWindow();}
+    }
+}
