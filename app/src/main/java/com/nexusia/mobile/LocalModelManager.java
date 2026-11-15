@@ -46,8 +46,8 @@ public final class LocalModelManager {
         if(active){listener.error("O download já está em andamento.");return;}
         if(!NativeEngine.available()){listener.error("Este aparelho não suporta o motor ARM64: "+NativeEngine.problem());return;}
         File finalFile=model(),part=new File(finalFile.getParentFile(),MODEL+".part");
-        if(finalFile.getUsableSpace()<BYTES+150L*1024*1024-(part.exists()?part.length():0)){
-            listener.error("Espaço livre insuficiente. Libere pelo menos 650 MB.");return;
+        if(finalFile.getUsableSpace()<BYTES+40L*1024*1024-(part.exists()?part.length():0)){
+            listener.error("Espaço livre insuficiente para o modelo. São necessários cerca de 500 MB na memória interna do celular. Abra Configurações → Armazenamento para liberar espaço.");return;
         }
         active=true;
         download.execute(()->{
