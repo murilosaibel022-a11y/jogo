@@ -1,4 +1,4 @@
-name: NEXUS IA - Android APK direto
+name: NEXUS IA Offline Android APK
 on:
   push:
     branches: [nexus-android-apk]
@@ -8,6 +8,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -17,27 +18,41 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools'
-      - name: Instalar Android SDK
+      - name: Instalar Android SDK e NDK
         run: |
           yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'platform-tools'
+          sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'platform-tools' 'ndk;27.2.12479018' 'cmake;3.22.1'
+      - name: Obter motor llama.cpp verificado e fixado
+        run: |
+          mkdir -p app/src/main/cpp/llama.cpp
+          git -C app/src/main/cpp/llama.cpp init -q
+          git -C app/src/main/cpp/llama.cpp remote add origin https://github.com/ggml-org/llama.cpp.git
+          git -C app/src/main/cpp/llama.cpp fetch --depth 1 origin a68799c6094020a020cee72895b8df36b3b81098
+          git -C app/src/main/cpp/llama.cpp checkout -q --detach FETCH_HEAD
+          test -f app/src/main/cpp/llama.cpp/include/llama.h
+      - uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: nexus-offline-dev-signature-v1
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Compilar aplicativo
-        run: gradle :app:assembleDebug --stacktrace
-      - name: Verificar APK
+      - name: Compilar aplicativo Android com inferência nativa
+        run: gradle :app:assembleDebug --stacktrace --no-daemon
+      - name: Validar APK e biblioteca local
         run: |
           test -s app/build/outputs/apk/debug/app-debug.apk
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep 'lib/arm64-v8a/libnexuslocal.so'
+          "${ANDROID_SDK_ROOT}/build-tools/35.0.0/apksigner" verify --verbose app/build/outputs/apk/debug/app-debug.apk
           sha256sum app/build/outputs/apk/debug/app-debug.apk
-      - name: Publicar APK instalável
+      - name: Publicar APK direto para instalar
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk NEXUS_IA_Android_0.5.apk
-          gh release delete nexus-mobile-0.5 --yes 2>/dev/null || true
-          gh release create nexus-mobile-0.5 NEXUS_IA_Android_0.5.apk --title "NEXUS IA Android 0.5" --notes "APK de desenvolvimento para instalação direta no Android. Nova interface NEXUS original animada, conversa, voz com reconhecimento e síntese, anexos de arquivos e imagens com Companion atualizado, edição de projetos offline. Modelos locais e agentes dependem do PC." --target "${{ github.sha }}"
+          cp app/build/outputs/apk/debug/app-debug.apk NEXUS_IA_Offline_Android_0.6.apk
+          gh release delete nexus-mobile-offline-0.6 --yes 2>/dev/null || true
+          gh release create nexus-mobile-offline-0.6 NEXUS_IA_Offline_Android_0.6.apk --title "NEXUS IA Offline 0.6 — Android" --notes "App Android independente do PC. Biblioteca llama.cpp nativa ARM64. Primeiro uso: baixar modelo GGUF de 484 MB (Qwen3-0.6B Q4_K_M) via app, com integridade SHA-256; depois conversas offline. Interface original, voz usando recursos do Android, projetos de jogos e código locais. Um modelo pequeno tem limitações e não executa jogos 3D sozinho. APK de desenvolvimento para instalação direta; não validado fisicamente." --target "${{ github.sha }}"
       - uses: actions/upload-artifact@v4
         with:
-          name: NEXUS-IA-Android-APK
-          path: NEXUS_IA_Android_0.5.apk
+          name: NEXUS-IA-Offline-Android-APK
+          path: NEXUS_IA_Offline_Android_0.6.apk
