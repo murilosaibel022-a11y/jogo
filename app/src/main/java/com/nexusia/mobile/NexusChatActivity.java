@@ -64,6 +64,8 @@ public final class NexusChatActivity extends Activity {
     private TextView stateLabel, attachLabel;
     private SharedPreferences settings;
     private SecretStore pairing;
+    private LocalModelManager localModel;
+    private boolean localReady=false;
     private TextToSpeech tts;
     private boolean speechReady=false, voiceMode=false, working=false, linked=false;
     private String projectId="", pendingName="", pendingMime="", pendingContent="", pendingBase64="";
@@ -81,6 +83,8 @@ public final class NexusChatActivity extends Activity {
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         settings=getSharedPreferences("nexus_assistant",MODE_PRIVATE);
         pairing=new SecretStore(this);
+        localModel=new LocalModelManager(this);
+        localReady=localModel.ready();
         restoreTranscript();
         tts=new TextToSpeech(this, status->{
             speechReady=status==TextToSpeech.SUCCESS;
@@ -172,7 +176,7 @@ public final class NexusChatActivity extends Activity {
     }
     void showChat(){
         currentPage="chat";
-        base("NEXUS IA",linked?"● Conectada • assistente unificado":"● Modo local • conecte o PC para IA");
+        base("NEXUS IA",localReady?"● IA no celular • funciona offline":linked?"● PC conectado • modo opcional":"● IA independente • ativação inicial");
         ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);scroll.setVerticalScrollBarEnabled(false);
         shell.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));scroller=scroll;
         messagesHost=vertical();messagesHost.setPadding(dp(16),dp(12),dp(16),dp(20));
@@ -230,15 +234,15 @@ public final class NexusChatActivity extends Activity {
         TextView desc=text("Uma conversa. Um assistente.\nProjetos, código e criatividade no mesmo lugar.",14,MUTED,false);
         desc.setGravity(Gravity.CENTER);desc.setPadding(0,dp(11),0,dp(18));intro.addView(desc);
         appear(intro,0);
-        if(!linked){
+        if(!localReady){
             LinearLayout box=vertical();box.setPadding(dp(18),dp(17),dp(18),dp(17));
             box.setBackground(gradient(0xff192944,0xff211E41,22));
             LinearLayout.LayoutParams p=lp(-1,-2);p.topMargin=dp(4);messagesHost.addView(box,p);
-            box.addView(text("✧ Ative a inteligência",16,WHITE,true));addGap(box,6);
-            box.addView(text("O editor funciona no celular. Para respostas reais, conecte a NEXUS ao seu PC com um modelo de IA instalado.",13,MUTED,false));
+            box.addView(text("✧ Sua IA, dentro do celular",16,WHITE,true));addGap(box,6);
+            box.addView(text("Baixe a inteligência apenas uma vez (aproximadamente 484 MB). Depois, converse sem internet, PC, conta ou assinatura. A NEXUS instala uma configuração leve automaticamente.",13,MUTED,false));
             addGap(box,12);
-            TextView connect=pill("Conectar meu computador  ↗",0xff32426D,WHITE);
-            connect.setOnClickListener(v->showConnection());box.addView(connect);
+            TextView connect=pill("Ativar IA no celular  ↗",0xff32426D,WHITE);
+            connect.setOnClickListener(v->setupLocal());box.addView(connect);
             appear(box,100);
         }
     }
@@ -295,7 +299,7 @@ public final class NexusChatActivity extends Activity {
         }
     }
     void stopBusy(){
-        working=false;setStatus(linked?"● Conectada • pronta para conversar":"● Sem conexão com modelo");
+        working=false;setStatus(localReady?"● IA local • pronta e offline":linked?"● PC conectado":"● Ative a IA no celular");
         if(messagesHost!=null){for(int i=messagesHost.getChildCount()-1;i>=0;i--){
             View x=messagesHost.getChildAt(i);if("loading".equals(x.getTag()))messagesHost.removeViewAt(i);
         }}
@@ -304,11 +308,19 @@ public final class NexusChatActivity extends Activity {
         if(working)return;
         String value=messageField.getText().toString().trim();
         if(value.isEmpty()&&pendingName.isEmpty())return;
+        if(localReady){
+            if(!pendingBase64.isEmpty()){
+                new AlertDialog.Builder(this).setTitle("Imagem anexada").setMessage("O modelo local desta versão entende texto e código, não imagens. Para analisar fotos, é necessário instalar um modelo visual compatível em uma próxima atualização.").setPositiveButton("OK",null).show();
+                return;
+            }
+            sendLocal(value,pendingName,pendingContent);
+            return;
+        }
         if(!linked||projectId.isEmpty()){
             if(!value.isEmpty())messageField.setText(value);
-            new AlertDialog.Builder(this).setTitle("IA ainda não conectada")
-                .setMessage("Para responder com inteligência artificial, conecte o NEXUS Companion do PC. Seus arquivos locais continuam acessíveis no Studio.")
-                .setNegativeButton("Agora não",null).setPositiveButton("Conectar",(d,w)->showConnection()).show();
+            new AlertDialog.Builder(this).setTitle("Instale a IA local")
+                .setMessage("A NEXUS IA pode funcionar no próprio celular. É necessário instalar uma vez o modelo de aproximadamente 484 MB.")
+                .setNegativeButton("Agora não",null).setPositiveButton("Instalar",(d,w)->setupLocal()).show();
             return;
         }
         String display=value.isEmpty()?"📎 "+pendingName:value;
@@ -335,6 +347,93 @@ public final class NexusChatActivity extends Activity {
                 voiceMode=false;});}
         });
     }
+
+    void setupLocal(){
+        if(localReady){toast("A NEXUS IA já está instalada no seu celular.");return;}
+        if(localModel.downloading()){toast("Download da IA em andamento.");return;}
+        new AlertDialog.Builder(this)
+            .setTitle("Instalar IA independente")
+            .setMessage("A NEXUS IA vai baixar cerca de 484 MB pelo Wi-Fi (modelo Qwen3 0.6B). Precisa de aproximadamente 650 MB de espaço livre. Depois da primeira instalação, o chat funciona offline e sem computador. Esta versão local é compacta e não tem a mesma capacidade de modelos grandes na nuvem.\n\nDeseja instalar?")
+            .setNegativeButton("Cancelar",null)
+            .setPositiveButton("Baixar e ativar",(dialog,which)->{
+                startBusy();
+                localModel.install(new LocalModelManager.Listener(){
+                    @Override public void progress(int percent,String value){
+                        runOnUiThread(()->setStatus("↓ "+percent+"% • "+value));
+                    }
+                    @Override public void ready(){
+                        runOnUiThread(()->{
+                            localReady=true;stopBusy();showChat();
+                            toast("IA instalada. Agora a NEXUS funciona sem PC.");
+                        });
+                    }
+                    @Override public void error(String problem){
+                        runOnUiThread(()->{
+                            stopBusy();new AlertDialog.Builder(NexusChatActivity.this)
+                                .setTitle("A instalação não foi concluída")
+                                .setMessage(problem+"\n\nO download parcial pode ser retomado.")
+                                .setPositiveButton("Entendi",null).show();
+                        });
+                    }
+                });
+            }).show();
+    }
+    void sendLocal(String question,String name,String attachment){
+        StringBuilder all=new StringBuilder(question);
+        if(!name.isEmpty()&&!attachment.isEmpty()){
+            if(all.length()>0)all.append("\n\n");
+            all.append("Conteúdo do arquivo ").append(name).append(":\n")
+                .append(attachment.substring(0,Math.min(attachment.length(),10000)));
+        }
+        final String value=all.toString();
+        String display=question.isEmpty()?("Analise "+name):question;
+        if(!name.isEmpty())display+="\n📎 "+name;
+        record("user",display);messageField.setText("");
+        clearAttachment();startBusy();
+        final String prompt=localPrompt(value);
+        network.execute(()->{
+            try{
+                String answer=NativeEngine.generate(localModel.path(),prompt);
+                runOnUiThread(()->{
+                    stopBusy();record("assistant",answer);
+                    if(voiceMode)speak(answer);
+                });
+            }catch(Throwable e){
+                runOnUiThread(()->{
+                    stopBusy();
+                    record("system","Não consegui executar o modelo local: "+(e.getMessage()==null?e.getClass().getSimpleName():e.getMessage()));
+                    voiceMode=false;
+                });
+            }
+        });
+    }
+    String localPrompt(String current){
+        StringBuilder out=new StringBuilder();
+        out.append("<|im_start|>system\n");
+        out.append("Você é NEXUS IA, um assistente próprio para português brasileiro, jogos e programação. ");
+        out.append("Fale diretamente com o usuário, com clareza e naturalidade. ");
+        out.append("Crie código real quando solicitado, explique erros, ajude a projetar jogos. ");
+        out.append("Você está rodando offline no celular e não tem internet nem acesso a programas externos. ");
+        out.append("Não finja executar ferramentas ou criar arquivos quando não tiver feito isso. ");
+        out.append("Seu modelo é compacto: admita quando não souber. Responda de forma útil e concisa.\n");
+        out.append("<|im_end|>\n");
+        int from=Math.max(0,transcript.size()-5);
+        for(int i=from;i<transcript.size()-1;i++){
+            ChatLine line=transcript.get(i);
+            if(!line.role.equals("user")&&!line.role.equals("assistant"))continue;
+            String t=line.text;
+            if(t.length()>650)t=t.substring(t.length()-650);
+            out.append("<|im_start|>").append(line.role).append("\n")
+               .append(t.replace("<|im_start|>","").replace("<|im_end|>",""))
+               .append("\n<|im_end|>\n");
+        }
+        String bounded=current.length()>4800?current.substring(current.length()-4800):current;
+        out.append("<|im_start|>user\n")
+            .append(bounded.replace("<|im_start|>","").replace("<|im_end|>",""))
+            .append("\n/no_think\n<|im_end|>\n<|im_start|>assistant\n");
+        return out.toString();
+    }
+
     void clearAttachment(){
         pendingName="";pendingMime="";pendingContent="";pendingBase64="";
         if(attachLabel!=null){attachLabel.setVisibility(View.GONE);attachLabel.setText("");}
@@ -381,6 +480,7 @@ public final class NexusChatActivity extends Activity {
             i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
             i.putExtra(RecognizerIntent.EXTRA_LANGUAGE,"pt-BR");
             i.putExtra(RecognizerIntent.EXTRA_PROMPT,"Fale com a NEXUS IA");
+            i.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE,true);
             startActivityForResult(i,SPEECH);
         }catch(Exception ex){voiceMode=false;
             new AlertDialog.Builder(this).setTitle("Reconhecimento de voz indisponível")
