@@ -198,14 +198,15 @@ public final class NexusChatActivity extends Activity {
         }).show();
     }
     void bottom(String selected){
-        LinearLayout bar=new LinearLayout(this);bar.setPadding(dp(12),dp(7),dp(12),dp(8));
-        bar.setBackgroundColor(SURFACE);shell.addView(bar,lp(-1,dp(65)));
-        nav(bar,"◉","Conversa","chat",selected,()->showChat());
-        nav(bar,"◈","Studio","studio",selected,()->{
-            voiceMode=false;if(tts!=null)tts.stop();
-            startActivity(new Intent(this,MainActivity.class));
-        });
-        nav(bar,"⌁","Conexão","connect",selected,()->showConnection());
+        if(selected.equals("connect")){
+            LinearLayout row=vertical();
+            row.setPadding(dp(18),dp(10),dp(18),dp(14));
+            shell.addView(row);
+            TextView back=pill("← Voltar à conversa",SOFT,WHITE);
+            back.setPadding(dp(12),dp(13),dp(12),dp(13));
+            back.setOnClickListener(v->showChat());
+            row.addView(back,lp(-1,-2));
+        }
     }
     void nav(LinearLayout row,String icon,String label,String id,String selected,Runnable click){
         LinearLayout item=vertical();item.setGravity(Gravity.CENTER);
@@ -779,29 +780,42 @@ public final class NexusChatActivity extends Activity {
             });
         }catch(Exception ignored){}
     }
+    /** A composição do buraco negro é preservada, sem fazer o disco inteiro girar. */
     private final class OrbitLogo extends View {
-        final Paint paint=new Paint(3);final RectF arc=new RectF();float rotation=0;
-        final ValueAnimator animator=ValueAnimator.ofFloat(0f,360f);
+        final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG);
+        final android.graphics.Bitmap image;
+        final ValueAnimator animator=ValueAnimator.ofFloat(0.99f,1.025f);
+        float pulse=1f;
         OrbitLogo(){
-            super(NexusChatActivity.this);setLayerType(View.LAYER_TYPE_SOFTWARE,null);
-            animator.setDuration(13000);animator.setRepeatCount(ValueAnimator.INFINITE);
-            animator.setInterpolator(new android.view.animation.LinearInterpolator());
-            animator.addUpdateListener(a->{rotation=(float)a.getAnimatedValue();invalidate();});animator.start();
+            super(NexusChatActivity.this);
+            image=android.graphics.BitmapFactory.decodeResource(getResources(),R.drawable.nexus_icon);
+            animator.setRepeatCount(ValueAnimator.INFINITE);
+            animator.setRepeatMode(ValueAnimator.REVERSE);
+            animator.setDuration(1900);
+            animator.addUpdateListener(a->{pulse=(float)a.getAnimatedValue();invalidate();});
+            animator.start();
         }
         @Override protected void onDraw(Canvas c){
-            super.onDraw(c);float size=Math.min(getWidth(),getHeight()),cx=getWidth()/2f,cy=getHeight()/2f;
-            c.save();c.translate(cx,cy);c.rotate(rotation);
-            paint.setStyle(Paint.Style.STROKE);paint.setStrokeCap(Paint.Cap.ROUND);
-            paint.setStrokeWidth(size*0.055f);
-            arc.set(-size*.38f,-size*.38f,size*.38f,size*.38f);
-            paint.setColor(CYAN);c.drawArc(arc,12,145,false,paint);
-            paint.setColor(VIOLET);c.drawArc(arc,193,142,false,paint);
-            paint.setStrokeWidth(size*.035f);arc.set(-size*.27f,-size*.27f,size*.27f,size*.27f);
-            paint.setColor(0xffA4B6FF);c.drawArc(arc,90,155,false,paint);
-            c.restore();paint.setStyle(Paint.Style.FILL);
-            paint.setShader(new android.graphics.RadialGradient(cx-size*.04f,cy-size*.07f,size*.22f,
-                new int[]{0xffB8FFFF,CYAN,0xff5C54D6},null,android.graphics.Shader.TileMode.CLAMP));
-            c.drawCircle(cx,cy,size*.16f,paint);paint.setShader(null);
+            super.onDraw(c);
+            float size=Math.min(getWidth(),getHeight());
+            float cx=getWidth()/2f,cy=getHeight()/2f;
+            float radius=size*.49f*pulse;
+            if(image!=null){
+                c.save();c.clipPath(new android.graphics.Path(){{
+                    addRoundRect(new RectF(cx-radius,cy-radius,cx+radius,cy+radius),
+                        size*.21f,size*.21f,Direction.CW);
+                }});
+                c.drawBitmap(image,null,new RectF(cx-radius,cy-radius,cx+radius,cy+radius),paint);
+                c.restore();
+            }else{
+                paint.setColor(0xff12141D);c.drawCircle(cx,cy,size*.45f,paint);
+                paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(size*.07f);
+                paint.setColor(0xffFFB273);c.drawArc(
+                    new RectF(cx-radius*.65f,cy-radius*.48f,cx+radius*.75f,cy+radius*.48f),
+                    290,250,false,paint);
+                paint.setStyle(Paint.Style.FILL);
+                paint.setColor(Color.BLACK);c.drawCircle(cx,cy,size*.23f,paint);
+            }
         }
         @Override protected void onDetachedFromWindow(){animator.cancel();super.onDetachedFromWindow();}
     }
