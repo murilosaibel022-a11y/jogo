@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 <uses-permission android:name="android.permission.INTERNET"/>
-<queries><intent><action android:name="android.intent.action.TTS_SERVICE"/></intent></queries>
+<uses-permission android:name="android.permission.RECORD_AUDIO"/>
+<queries>
+<intent><action android:name="android.intent.action.TTS_SERVICE"/></intent>
+<intent><action android:name="android.speech.RecognitionService"/></intent>
+</queries>
 <application android:label="NEXUS IA" android:theme="@android:style/Theme.Material.NoActionBar" android:usesCleartextTraffic="true" android:allowBackup="false" android:icon="@drawable/nexus_icon">
 <activity android:name=".NexusChatActivity" android:exported="true" android:windowSoftInputMode="adjustResize"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity>
 <activity android:name=".MainActivity" android:exported="false" android:windowSoftInputMode="adjustResize"/>
