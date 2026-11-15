@@ -52,9 +52,9 @@ import java.util.concurrent.Executors;
 
 /** NEXUS IA: conversa integrada. Os modelos nunca são escolhidos manualmente no Android. */
 public final class NexusChatActivity extends Activity {
-    private static final int BACK=0xff070C18, SURFACE=0xff111A2C, SOFT=0xff1B2940,
-            WHITE=0xffEAF2FF, MUTED=0xff97A7C7, CYAN=0xff5BE4EC, VIOLET=0xff9C83FF,
-            OUTLINE=0xff293756, GREEN=0xff7DECC8;
+    private static final int BACK=0xff090B12, SURFACE=0xff171B29, SOFT=0xff23293A,
+            WHITE=0xffF5F6FB, MUTED=0xffA8AEC0, CYAN=0xff75DBF7, VIOLET=0xffB38CFC,
+            OUTLINE=0xff343A4B, GREEN=0xff78E9BF, ORANGE=0xffFFAF6A;
     private static final int PICK=241, SPEECH=242;
     private final ExecutorService network=Executors.newSingleThreadExecutor();
     private final List<ChatLine> transcript=new ArrayList<>();
@@ -71,6 +71,10 @@ public final class NexusChatActivity extends Activity {
     private String projectId="", pendingName="", pendingMime="", pendingContent="", pendingBase64="";
     private String currentPage="chat";
     private OrbitLogo logo;
+    private android.speech.SpeechRecognizer speechRecognizer;
+    private android.app.Dialog voiceDialog;
+    private TextView voiceStatus;
+    private boolean voiceStarting=false;
     private int messageSerial=0;
     private static class ChatLine {
         final String role,text;
@@ -144,16 +148,46 @@ public final class NexusChatActivity extends Activity {
             });
         }
         LinearLayout head=new LinearLayout(this);head.setGravity(Gravity.CENTER_VERTICAL);
-        head.setPadding(dp(17),dp(12),dp(17),dp(10));
-        shell.addView(head,lp(-1,dp(76)));
-        logo=new OrbitLogo();head.addView(logo,lp(dp(48),dp(48)));
+        head.setPadding(dp(16),dp(8),dp(16),dp(8));head.setBackgroundColor(BACK);
+        shell.addView(head,lp(-1,dp(69)));
+        logo=new OrbitLogo();head.addView(logo,lp(dp(44),dp(44)));
         LinearLayout names=vertical();
         LinearLayout.LayoutParams np=new LinearLayout.LayoutParams(0,-2,1);
-        np.leftMargin=dp(13);head.addView(names,np);
-        names.addView(text(title,21,WHITE,true));
-        stateLabel=text(sub,12,MUTED,false);names.addView(stateLabel);
-        TextView setting=tap("⚙",22,()->showConnection());
-        head.addView(setting,lp(dp(46),dp(46)));
+        np.leftMargin=dp(10);head.addView(names,np);
+        names.addView(text(title,18,WHITE,true));
+        stateLabel=text(sub,11,MUTED,false);names.addView(stateLabel);
+        TextView fresh=headerControl("＋",()->newChat());
+        fresh.setContentDescription("Nova conversa");
+        head.addView(fresh,lp(dp(38),dp(40)));
+        TextView more=headerControl("⋮",()->showActions());
+        more.setContentDescription("Mais opções");
+        LinearLayout.LayoutParams ml=lp(dp(38),dp(40));ml.leftMargin=dp(5);head.addView(more,ml);
+        View line=new View(this);line.setBackgroundColor(0xff232633);
+        shell.addView(line,lp(-1,dp(1)));
+    }
+    TextView headerControl(String symbol,Runnable click){
+        TextView v=text(symbol,24,MUTED,false);
+        v.setGravity(Gravity.CENTER);v.setBackground(rounded(BACK,0,12));
+        v.setOnClickListener(x->click.run());return v;
+    }
+    void newChat(){
+        if(working){toast("A NEXUS está respondendo.");return;}
+        if(transcript.isEmpty()){showChat();return;}
+        new AlertDialog.Builder(this).setTitle("Nova conversa")
+            .setMessage("Começar uma conversa vazia neste celular? O histórico anterior será limpo aqui.")
+            .setNegativeButton("Cancelar",null)
+            .setPositiveButton("Criar",(d,w)->{transcript.clear();persistTranscript();showChat();}).show();
+    }
+    void showActions(){
+        String[] options={"Projetos e programação","Configurar IA local","Conectar computador","Nova conversa"};
+        new AlertDialog.Builder(this).setTitle("NEXUS IA").setItems(options,(d,index)->{
+            switch(index){
+                case 0: startActivity(new Intent(this,MainActivity.class));break;
+                case 1: setupLocal();break;
+                case 2: showConnection();break;
+                case 3: newChat();break;
+            }
+        }).show();
     }
     void bottom(String selected){
         LinearLayout bar=new LinearLayout(this);bar.setPadding(dp(12),dp(7),dp(12),dp(8));
@@ -176,75 +210,65 @@ public final class NexusChatActivity extends Activity {
     }
     void showChat(){
         currentPage="chat";
-        base("NEXUS IA",localReady?"● IA no celular • funciona offline":linked?"● PC conectado • modo opcional":"● IA independente • ativação inicial");
-        ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);scroll.setVerticalScrollBarEnabled(false);
+        base("NEXUS IA",localReady?"● IA local disponível":linked?"● Computador conectado":"● Ativar IA local em Configurações");
+        ScrollView scroll=new ScrollView(this);
+        scroll.setFillViewport(true);scroll.setVerticalScrollBarEnabled(false);
         shell.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));scroller=scroll;
-        messagesHost=vertical();messagesHost.setPadding(dp(16),dp(12),dp(16),dp(20));
+        messagesHost=vertical();messagesHost.setPadding(dp(17),dp(8),dp(17),dp(22));
         scroll.addView(messagesHost,new ScrollView.LayoutParams(-1,-2));
         if(transcript.isEmpty())welcome();
-        else for(ChatLine line:transcript) addBubble(line.role,line.text,false);
+        else for(ChatLine line:transcript)addBubble(line.role,line.text,false);
         footer=vertical();footer.setPadding(dp(12),dp(7),dp(12),dp(11));
         footer.setBackgroundColor(BACK);shell.addView(footer,lp(-1,-2));
         attachLabel=text("",12,CYAN,false);
-        if(!pendingName.isEmpty()){attachLabel.setText("📎 "+pendingName+"   ×");}
+        if(!pendingName.isEmpty())attachLabel.setText("📎 "+pendingName+"  ×");
         attachLabel.setVisibility(pendingName.isEmpty()?View.GONE:View.VISIBLE);
-        attachLabel.setPadding(dp(13),dp(6),0,dp(9));
-        attachLabel.setOnClickListener(v->clearAttachment());
-        footer.addView(attachLabel);
+        attachLabel.setPadding(dp(12),dp(4),0,dp(7));
+        attachLabel.setOnClickListener(v->clearAttachment());footer.addView(attachLabel);
         composerRow=new LinearLayout(this);composerRow.setGravity(Gravity.CENTER_VERTICAL);
-        composerRow.setBackground(rounded(SURFACE,OUTLINE,24));
-        composerRow.setPadding(dp(8),dp(8),dp(8),dp(8));footer.addView(composerRow);
-        TextView file=tap("+",25,()->pickAttachment());file.setBackground(rounded(SOFT,0,16));
-        composerRow.addView(file,lp(dp(44),dp(46)));
+        composerRow.setBackground(rounded(SURFACE,OUTLINE,22));
+        composerRow.setPadding(dp(6),dp(5),dp(6),dp(5));footer.addView(composerRow);
+        TextView file=tap("+",25,()->pickAttachment());
+        file.setContentDescription("Anexar arquivo");file.setTextColor(WHITE);
+        file.setBackground(rounded(SURFACE,0,18));composerRow.addView(file,lp(dp(39),dp(46)));
         messageField=new EditText(this);
-        messageField.setTextColor(WHITE);messageField.setHintTextColor(MUTED);
-        messageField.setTextSize(15);messageField.setHint("Mensagem para NEXUS...");
-        messageField.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE|
-                InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        messageField.setTextColor(WHITE);messageField.setHintTextColor(0xff919BAD);
+        messageField.setTextSize(16);messageField.setHint("Mensagem");
+        messageField.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE|InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         messageField.setBackgroundColor(Color.TRANSPARENT);
-        messageField.setMinHeight(dp(46));messageField.setMaxLines(5);
-        messageField.setPadding(dp(12),0,dp(5),0);
+        messageField.setMinHeight(dp(44));messageField.setMaxLines(6);
+        messageField.setPadding(dp(7),0,dp(4),0);
         composerRow.addView(messageField,new LinearLayout.LayoutParams(0,-2,1));
-        TextView mic=tap("♬",20,()->listen());mic.setContentDescription("Falar mensagem");
-        mic.setBackground(rounded(SOFT,0,16));composerRow.addView(mic,lp(dp(42),dp(46)));
-        TextView send=tap("➤",23,()->send());
-        send.setContentDescription("Enviar mensagem");send.setBackground(gradient(VIOLET,0xff685AE7,16));
-        LinearLayout.LayoutParams sp=lp(dp(47),dp(46));sp.leftMargin=dp(6);composerRow.addView(send,sp);
-        LinearLayout extras=new LinearLayout(this);extras.setGravity(Gravity.CENTER_VERTICAL);
-        extras.setPadding(dp(6),dp(9),dp(6),0);footer.addView(extras);
-        TextView talk=pill(voiceMode?"◉ Modo voz ativo":"◯ Modo voz",voiceMode?0xff263B50:SOFT,voiceMode?CYAN:MUTED);
-        talk.setOnClickListener(v->{voiceMode=!voiceMode;if(voiceMode)listen();else if(tts!=null)tts.stop();showChat();});
-        extras.addView(talk);
-        TextView small=text("  •  Voz, texto e anexos em um só chat",11,MUTED,false);
-        extras.addView(small);
-        bottom("chat");
+        TextView voice=tap("◉",23,()->startVoiceConversation());
+        voice.setContentDescription("Iniciar conversa por voz");
+        voice.setTextColor(CYAN);voice.setBackground(rounded(SOFT,0,16));
+        composerRow.addView(voice,lp(dp(43),dp(44)));
+        TextView send=tap("↑",25,()->send());send.setContentDescription("Enviar mensagem");
+        send.setBackground(gradient(0xff6B8DFF,0xff9169F4,17));
+        LinearLayout.LayoutParams sp=lp(dp(43),dp(44));sp.leftMargin=dp(5);composerRow.addView(send,sp);
+        TextView hint=text("Conversas locais permanecem neste dispositivo",10,MUTED,false);
+        hint.setGravity(Gravity.CENTER);hint.setPadding(0,dp(7),0,0);
+        footer.addView(hint);
         scrollBottom();
     }
     void welcome(){
-        LinearLayout intro=vertical();intro.setGravity(Gravity.CENTER);
-        intro.setPadding(dp(18),dp(40),dp(18),dp(26));
-        messagesHost.addView(intro);
-        OrbitLogo big=new OrbitLogo();LinearLayout.LayoutParams bp=lp(dp(90),dp(90));bp.gravity=Gravity.CENTER;
-        intro.addView(big,bp);
-        addGap(intro,dp(2));
-        TextView headline=text("Inteligência para criar.",27,WHITE,true);
-        headline.setGravity(Gravity.CENTER);intro.addView(headline);
-        TextView second=text("Ideias que ganham vida.",24,CYAN,true);
-        second.setGravity(Gravity.CENTER);intro.addView(second);
-        TextView desc=text("Uma conversa. Um assistente.\nProjetos, código e criatividade no mesmo lugar.",14,MUTED,false);
-        desc.setGravity(Gravity.CENTER);desc.setPadding(0,dp(11),0,dp(18));intro.addView(desc);
-        appear(intro,0);
+        LinearLayout root=vertical();root.setGravity(Gravity.CENTER);
+        root.setPadding(dp(12),dp(45),dp(12),dp(14));
+        messagesHost.addView(root,new LinearLayout.LayoutParams(-1,-1));
+        OrbitLogo image=new OrbitLogo();
+        LinearLayout.LayoutParams icon=lp(dp(100),dp(100));icon.gravity=Gravity.CENTER;
+        root.addView(image,icon);addGap(root,18);
+        TextView h=text("NEXUS IA",24,WHITE,true);h.setGravity(Gravity.CENTER);root.addView(h);
+        TextView intro=text("Um assistente para conversar, programar e criar.",14,MUTED,false);
+        intro.setGravity(Gravity.CENTER);intro.setPadding(dp(20),dp(10),dp(20),dp(5));root.addView(intro);
         if(!localReady){
-            LinearLayout box=vertical();box.setPadding(dp(18),dp(17),dp(18),dp(17));
-            box.setBackground(gradient(0xff192944,0xff211E41,22));
-            LinearLayout.LayoutParams p=lp(-1,-2);p.topMargin=dp(4);messagesHost.addView(box,p);
-            box.addView(text("✧ Sua IA, dentro do celular",16,WHITE,true));addGap(box,6);
-            box.addView(text("Baixe a inteligência apenas uma vez (aproximadamente 484 MB). Depois, converse sem internet, PC, conta ou assinatura. A NEXUS instala uma configuração leve automaticamente.",13,MUTED,false));
-            addGap(box,12);
-            TextView connect=pill("Ativar IA no celular  ↗",0xff32426D,WHITE);
-            connect.setOnClickListener(v->setupLocal());box.addView(connect);
-            appear(box,100);
+            addGap(root,22);
+            TextView status=pill("Ativar IA neste celular  ›",0xff202638,CYAN);
+            status.setPadding(dp(18),dp(12),dp(18),dp(12));
+            status.setOnClickListener(v->setupLocal());
+            LinearLayout.LayoutParams sl=lp(-2,-2);sl.gravity=Gravity.CENTER;root.addView(status,sl);
         }
+        appear(root,0);
     }
     void addBubble(String role,String content,boolean animate){
         boolean mine=role.equals("user"),system=role.equals("system");
