@@ -37,6 +37,12 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+      - name: Integrar ícone fotorrealista ao aplicativo
+        run: |
+          mkdir -p app/src/main/res/drawable-nodpi
+          base64 -d assets/nexus_blackhole_icon.webp.b64 > app/src/main/res/drawable-nodpi/nexus_icon.webp
+          rm app/src/main/res/drawable/nexus_icon.xml
+          file app/src/main/res/drawable-nodpi/nexus_icon.webp
       - name: Compilar aplicativo Android com inferência nativa
         run: gradle :app:assembleDebug --stacktrace --no-daemon
       - name: Validar APK e biblioteca local
@@ -49,10 +55,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk NEXUS_IA_Offline_Android_0.6.apk
-          gh release delete nexus-mobile-offline-0.6 --yes 2>/dev/null || true
-          gh release create nexus-mobile-offline-0.6 NEXUS_IA_Offline_Android_0.6.apk --title "NEXUS IA Offline 0.6 — Android" --notes "App Android independente do PC. Biblioteca llama.cpp nativa ARM64. Primeiro uso: baixar modelo GGUF de 484 MB (Qwen3-0.6B Q4_K_M) via app, com integridade SHA-256; depois conversas offline. Interface original, voz usando recursos do Android, projetos de jogos e código locais. Um modelo pequeno tem limitações e não executa jogos 3D sozinho. APK de desenvolvimento para instalação direta; não validado fisicamente." --target "${{ github.sha }}"
+          cp app/build/outputs/apk/debug/app-debug.apk NEXUS_IA_Android_0.7.apk
+          gh release delete nexus-mobile-blackhole-0.7 --yes 2>/dev/null || true
+          gh release create nexus-mobile-blackhole-0.7 NEXUS_IA_Android_0.7.apk --title "NEXUS IA 0.7 — Android" --notes "NEXUS IA com chat na abertura, ícone cinematográfico de buraco negro, interface minimalista escura com cores vibrantes, voz direta no aplicativo sem popup de busca, anexo e Studio consistente. Motor GGUF local ARM64 requer download inicial de 484 MB e espaço interno. APK de desenvolvimento, não validado fisicamente." --target "${{ github.sha }}"
       - uses: actions/upload-artifact@v4
         with:
           name: NEXUS-IA-Offline-Android-APK
-          path: NEXUS_IA_Offline_Android_0.6.apk
+          path: NEXUS_IA_Android_0.7.apk
