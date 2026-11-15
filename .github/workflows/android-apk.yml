@@ -36,8 +36,8 @@ jobs:
         run: |
           cp app/build/outputs/apk/debug/app-debug.apk NEXUS_IA_Android_0.5.apk
           gh release delete nexus-mobile-0.5 --yes 2>/dev/null || true
-          gh release create nexus-mobile-0.5 NEXUS_IA_Android.apk --title "NEXUS IA Android 0.5" --notes "APK de desenvolvimento para instalação direta no Android. Nova interface NEXUS original animada, conversa, voz com reconhecimento e síntese, anexos de arquivos e imagens com Companion atualizado, edição de projetos offline. Modelos locais e agentes dependem do PC." --target "${{ github.sha }}"
+          gh release create nexus-mobile-0.5 NEXUS_IA_Android_0.5.apk --title "NEXUS IA Android 0.5" --notes "APK de desenvolvimento para instalação direta no Android. Nova interface NEXUS original animada, conversa, voz com reconhecimento e síntese, anexos de arquivos e imagens com Companion atualizado, edição de projetos offline. Modelos locais e agentes dependem do PC." --target "${{ github.sha }}"
       - uses: actions/upload-artifact@v4
         with:
           name: NEXUS-IA-Android-APK
-          path: NEXUS_IA_Android.apk
+          path: NEXUS_IA_Android_0.5.apk
