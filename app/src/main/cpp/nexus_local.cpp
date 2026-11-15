@@ -34,7 +34,6 @@ static std::string infer(const std::string &path,const std::string &prompt,int m
         if(g_model){llama_model_free(g_model);g_model=nullptr;}
         llama_model_params mp=llama_model_default_params();
         mp.n_gpu_layers=0; // battery/thermal-safe portable baseline for ARM64
-        mp.use_mmap=true;
         g_model=llama_model_load_from_file(path.c_str(),mp);
         if(!g_model)throw std::runtime_error("Não foi possível carregar o modelo GGUF.");
         g_loaded=path;
